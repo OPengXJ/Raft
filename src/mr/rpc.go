@@ -24,6 +24,23 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type HandOutTaskArgs struct{
+
+}
+
+type HandOutTaskReply struct{
+	Y	Task
+}
+
+type	TaskDoneArgs	struct{
+	TaskName	int
+	TaskType	int	//1.map 2.reduce
+	FileNames	[]string	//map:IntermediateFileNames
+}
+
+type TaskDoneReply struct{
+	Y	int
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
