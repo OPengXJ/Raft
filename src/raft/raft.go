@@ -67,7 +67,7 @@ type Raft struct {
 	Logs            []LogEntry
 	HasGotHeartBeat bool
 	State           int //1.follower,2.candidate,3.leader
-	HeartBearCond   *sync.Cond
+	HeartBeatCond   *sync.Cond
 }
 
 // define the log entry
@@ -168,6 +168,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 		return
+	}
+	// because someone can't get heartbeat from leader and will maybe change to leader immeditaly
+	if rf.State == 3 {
+		rf.State = 1
 	}
 	// in this term have vote to another
 	if args.Term == rf.CurrentTerm && rf.VoteFor != "" {
@@ -323,11 +327,10 @@ func (rf *Raft) ticker() {
 								rf.State = 3
 
 								//let the Heartbeater run
-								rf.HeartBearCond.Broadcast()
-								rf.mu.Unlock()
-								return
+								rf.HeartBeatCond.Broadcast()
 							}
 						}
+						//Whether there is votegranted or not, if term is higher than it, it has to change.
 						if requestVoteReply.Term >= rf.CurrentTerm {
 							rf.CurrentTerm = requestVoteArg.Term
 						}
@@ -346,16 +349,14 @@ func (rf *Raft) ticker() {
 		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		//there was a fault once,the electionTimeout should'n lower than broadcasttime pre: ms:=50+(rand.Int63()%300)
+		ms := 100 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
 func (rf *Raft) HeartBeater() {
-	rf.mu.Lock()
-	cond := sync.NewCond(&rf.mu)
-	rf.HeartBearCond = cond
-	rf.mu.Unlock()
+	cond := rf.HeartBeatCond
 	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.State != 3 {
@@ -383,9 +384,23 @@ func (rf *Raft) HeartBeater() {
 				continue
 			}
 			go func(i int) {
+				rf.mu.Lock()
+				// if it hasn't been leader
+				if rf.State != 3 {
+					rf.mu.Unlock()
+					return
+				}
+				rf.mu.Unlock()
 				reply := &AppendEntriesReply{}
 				if ok := rf.sendAppendEntries(i, &appendEntriesArgs, reply); ok {
 					//log.Printf("machine %d get heartbear respond from %d in term: %d \n", i, rf.me, rf.CurrentTerm)
+					// there is a fault once,if it get the reply.Term laster than itselfs ,it should change back to follower
+					//because there has been a newer leader
+					if reply.Term > rf.CurrentTerm {
+						rf.mu.Lock()
+						rf.State = 1
+						rf.mu.Unlock()
+					}
 				}
 
 			}(i)
@@ -410,6 +425,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	cond := sync.NewCond(&rf.mu)
+	rf.HeartBeatCond = cond
 
 	// Your initialization code here (2A, 2B, 2C).
 
